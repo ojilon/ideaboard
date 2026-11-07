@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,5 +41,25 @@ func TestDefaultsAreSane(t *testing.T) {
 	}
 	if d.BackgroundDim < 0 || d.BackgroundDim > 1 {
 		t.Errorf("default dim out of range: %v", d.BackgroundDim)
+	}
+}
+
+func TestWindowStateRoundTrip(t *testing.T) {
+	s := Defaults()
+	s.Window = WindowState{X: 30, Y: 40, W: 1000, H: 700}
+	s.LastBoard = "Reading notes"
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Settings
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Window != s.Window {
+		t.Errorf("window = %+v, want %+v", back.Window, s.Window)
+	}
+	if back.LastBoard != "Reading notes" {
+		t.Errorf("last board = %q", back.LastBoard)
 	}
 }

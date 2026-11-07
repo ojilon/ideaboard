@@ -1,109 +1,180 @@
-// Package ui holds design-system color tokens for IdeaBoard, aligned with
-// ideaboard-design-system.md. The light/dark palettes follow MyGo's
-// theme.Theme (light/dark) so the board respects the chosen appearance.
+// Design-system color tokens for IdeaBoard (ideaboard-design-system.md,
+// sections 2.1-2.3). Light and dark palettes are chosen from the MyGo
+// theme's background, so the board follows the chosen appearance.
 package ui
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 )
 
-// Light canvas / note colors (design system 2.1, 2.2).
-var light = palette{
-	canvas:     ui.Hex("#F7F8F6"),
-	surface:    ui.Hex("#FFFFFF"),
-	inkPrimary: ui.Hex("#27313A"),
-	inkSecond:  ui.Hex("#66717A"),
-	line:       ui.Hex("#DCE2DE"),
-	lineStrong: ui.Hex("#BCC7C0"),
-	regionOut:  ui.Hex("#B8C6BD"),
-	accent:     ui.Hex("#789A89"),
-}
-
-// Dark canvas / note colors (design system 2.3).
-var dark = palette{
-	canvas:     ui.Hex("#202127"),
-	surface:    ui.Hex("#292B33"),
-	inkPrimary: ui.Hex("#ECEEF0"),
-	inkSecond:  ui.Hex("#B4BAC2"),
-	line:       ui.Hex("#41454E"),
-	lineStrong: ui.Hex("#5B626D"),
-	regionOut:  ui.Hex("#555B64"),
-	accent:     ui.Hex("#9EBEAA"),
-}
-
+// palette holds the UI tokens for one appearance.
 type palette struct {
-	canvas     ui.Color
-	surface    ui.Color
-	inkPrimary ui.Color
-	inkSecond  ui.Color
-	line       ui.Color
-	lineStrong ui.Color
-	regionOut  ui.Color
-	accent     ui.Color
+	canvas      ui.Color
+	surface     ui.Color
+	surfaceMute ui.Color
+	surfaceHov  ui.Color
+	inkPrimary  ui.Color
+	inkSecond   ui.Color
+	inkTertiary ui.Color
+	line        ui.Color
+	lineStrong  ui.Color
+	regionOut   ui.Color
+	accent      ui.Color
+	accentSoft  ui.Color
+	focus       ui.Color
+	danger      ui.Color
 }
 
-// notePalette maps a note's color id to its fill color.
-var notePalette = map[string]ui.Color{
-	"#FFF4C7": ui.Hex("#FFF4C7"), // note-yellow
-	"#E2EEE3": ui.Hex("#E2EEE3"), // note-sage
-	"#F8E5DE": ui.Hex("#F8E5DE"), // note-peach
-	"#EEE8F8": ui.Hex("#EEE8F8"), // note-lavender
-	"#E5EDF8": ui.Hex("#E5EDF8"), // note-blue
-	"#F1F2EF": ui.Hex("#F1F2EF"), // note-neutral
+// light is design system 2.1.
+var light = palette{
+	canvas:      mustHex("#F7F8F6"),
+	surface:     mustHex("#FFFFFF"),
+	surfaceMute: mustHex("#F2F4F1"),
+	surfaceHov:  mustHex("#EEF2EE"),
+	inkPrimary:  mustHex("#27313A"),
+	inkSecond:   mustHex("#66717A"),
+	inkTertiary: mustHex("#89939A"),
+	line:        mustHex("#DCE2DE"),
+	lineStrong:  mustHex("#BCC7C0"),
+	regionOut:   mustHex("#B8C6BD"),
+	accent:      mustHex("#789A89"),
+	accentSoft:  mustHex("#DCE9E0"),
+	focus:       mustHex("#507D68"),
+	danger:      mustHex("#B85C55"),
 }
 
-// paletteFor returns the design palette matching the theme's appearance.
+// dark is design system 2.3.
+var dark = palette{
+	canvas:      mustHex("#202127"),
+	surface:     mustHex("#292B33"),
+	surfaceMute: mustHex("#30333C"),
+	surfaceHov:  mustHex("#393D47"),
+	inkPrimary:  mustHex("#ECEEF0"),
+	inkSecond:   mustHex("#B4BAC2"),
+	inkTertiary: mustHex("#8C949E"),
+	line:        mustHex("#41454E"),
+	lineStrong:  mustHex("#5B626D"),
+	regionOut:   mustHex("#555B64"),
+	accent:      mustHex("#9EBEAA"),
+	accentSoft:  mustHex("#35463D"),
+	focus:       mustHex("#B1D0BC"),
+	danger:      mustHex("#E18B82"),
+}
+
+// noteStyle is one entry of the note palette (design system 2.2): the fill
+// and the border/accent that goes with it.
+type noteStyle struct {
+	name   string
+	fill   string
+	border string
+}
+
+// noteStyles is the note palette, in the order the color picker shows it.
+var noteStyles = []noteStyle{
+	{"yellow", "#FFF4C7", "#E8D991"},
+	{"sage", "#E2EEE3", "#B9D0BD"},
+	{"peach", "#F8E5DE", "#E7C5B8"},
+	{"lavender", "#EEE8F8", "#D0C3E8"},
+	{"blue", "#E5EDF8", "#C4D2E8"},
+	{"neutral", "#F1F2EF", "#D9DEDA"},
+}
+
+// regionLabels are the label colors offered for regions (muted accents,
+// dark enough for text on the canvas).
+var regionLabels = []string{"#789A89", "#B07F69", "#8C7FB0", "#6E8FB8"}
+
+// noteInk is the note text color. Notes keep light-theme ink in both
+// themes, because pastel fills need dark text (design system 2.3).
+var noteInk = mustHex("#27313A")
+
+// noteFillDefault is the fill of a note with no or an unknown color.
+const noteFillDefault = "#FFF4C7"
+
+// paletteFor returns the palette matching the theme's appearance.
 func paletteFor(th *ui.Theme) palette {
 	if th == nil {
 		return light
 	}
-	// Luminance of the theme background decides light vs dark.
-	r, g, b := float64(th.Background.R), float64(th.Background.G), float64(th.Background.B)
-	lum := 0.299*r + 0.587*g + 0.114*b
-	if lum > 127 {
+	if luminance(th.Background) > 127 {
 		return light
 	}
 	return dark
 }
 
 // canvasColor returns the board background for the theme.
-func canvasColor(th *ui.Theme) ui.Color {
-	return paletteFor(th).canvas
-}
+func canvasColor(th *ui.Theme) ui.Color { return paletteFor(th).canvas }
 
-// noteFill returns the fill color for a note's color id, defaulting to
-// note-yellow.
-func noteFill(id string) ui.Color {
-	if c, ok := notePalette[id]; ok {
-		return c
-	}
-	return ui.Hex("#FFF4C7")
-}
+// inkColor returns the primary UI text/ink color for the theme.
+func inkColor(th *ui.Theme) ui.Color { return paletteFor(th).inkPrimary }
 
-// strokeColor returns a mid-tone border for a note.
-func strokeColor(id string) ui.Color {
-	// a slightly darker variant of the fill
-	return ui.Hex("#E8D991")
-}
+// mutedColor returns the secondary text color for the theme.
+func mutedColor(th *ui.Theme) ui.Color { return paletteFor(th).inkSecond }
 
-// regionColor returns the region outline color for the theme.
-func regionColor(th *ui.Theme) ui.Color {
-	return paletteFor(th).regionOut
-}
+// regionOutline returns the dashed region outline color for the theme.
+func regionOutline(th *ui.Theme) ui.Color { return paletteFor(th).regionOut }
 
 // connectorColor returns the connector color for the theme.
-func connectorColor(th *ui.Theme) ui.Color {
-	return paletteFor(th).lineStrong
+func connectorColor(th *ui.Theme) ui.Color { return paletteFor(th).inkSecond }
+
+// noteColorID normalizes a note color id for lookups.
+func noteColorID(id string) string { return strings.ToUpper(id) }
+
+// noteFill returns the fill for a note's color id. Unknown valid hex colors
+// (from older files) are used as they are; anything else gets the default.
+func noteFill(id string) ui.Color {
+	for _, s := range noteStyles {
+		if noteColorID(s.fill) == noteColorID(id) {
+			return mustHex(s.fill)
+		}
+	}
+	if c, ok := parseColor(id); ok {
+		return c
+	}
+	return mustHex(noteFillDefault)
 }
 
-// inkColor returns primary text color for the theme.
-func inkColor(th *ui.Theme) ui.Color {
-	return paletteFor(th).inkPrimary
+// noteBorder returns the border color for a note's color id.
+func noteBorder(id string) ui.Color {
+	for _, s := range noteStyles {
+		if noteColorID(s.fill) == noteColorID(id) {
+			return mustHex(s.border)
+		}
+	}
+	return mustHex("#D9DEDA")
 }
 
-// mutedColor returns secondary text color for the theme.
-func mutedColor(th *ui.Theme) ui.Color {
-	return paletteFor(th).inkSecond
+// regionLabel returns the label color for a region item's color id, or the
+// theme's muted ink when it has none.
+func regionLabel(id string, th *ui.Theme) ui.Color {
+	if c, ok := parseColor(id); ok {
+		return c
+	}
+	return mutedColor(th)
+}
+
+// parseColor reads "#rrggbb". It reports false for anything else.
+func parseColor(s string) (ui.Color, bool) {
+	if len(s) != 7 || s[0] != '#' {
+		return ui.Color{}, false
+	}
+	v, err := strconv.ParseUint(s[1:], 16, 32)
+	if err != nil {
+		return ui.Color{}, false
+	}
+	return ui.RGB(uint8(v>>16), uint8(v>>8), uint8(v)), true
+}
+
+// mustHex parses a constant design token. Only compile-time constants go
+// through it, so a bad token is a programming error.
+func mustHex(s string) ui.Color {
+	c, ok := parseColor(s)
+	if !ok {
+		panic("ui: bad color token " + s)
+	}
+	return c
 }
 
 // luminance returns the perceived brightness of a color, 0..255.

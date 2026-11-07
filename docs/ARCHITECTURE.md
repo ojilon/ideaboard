@@ -4,25 +4,26 @@
 
 ```
 ideaboard/
-  main.go            # entry point: MyGo app, window, board list, settings
-  go.mod             # module + replace directive -> local MyGo clone
-  board/             # board domain model (items, board, layer)
-    board.go         # Board: root item, layers, add/remove items, hit test
-    item.go          # Item: base + note, region, connector, stroke, image
-    layer.go         # Layer: z-ordered group of items on a board
-  storage/           # persistence
-    store.go         # board folder, board.json + assets/, safe write, autosave debounce
-    format.go        # JSON encode/decode of board.json (see docs/DATA_FORMAT.md)
-  ui/                # native UI view layer (MyGo `ui` package)
-    view.go          # root view: board list / canvas / settings shell
-    canvas.go        # infinite canvas: pan/zoom transform, input, tool handling
-    canvas_view.go   # drawing: notes, regions, connectors, strokes, images
-    tools.go         # tools: select, pan, pen, eraser, create-note
-    note_edit.go     # in-place note text editing (overlay TextArea)
-    toolbar.go       # slim floating toolbar
-  settings/          # user settings (theme, font, background image)
-    settings.go      # load/save settings.json, theme/font/background values
-  installer/         # Inno Setup script + build instructions (added last)
+  main.go              # entry point: MyGo app, window, board list, open board, settings, image pick/paste
+  go.mod               # module + replace directive -> local MyGo clone
+  board/               # board domain model
+    item.go            # Board, Layer, Item (note, region, connector, stroke, image), add/remove/restore
+  storage/             # persistence
+    store.go           # board folder, board.json + assets/, safe write, autosave debounce, board list
+  ui/                  # native UI (MyGo `ui` package)
+    canvas.go          # Canvas state, View (one frame), public hooks
+    canvas_input.go    # pointer/keyboard input -> tool actions, pan, zoom
+    canvas_items.go    # hit-testing, create/remove with undo history, edit mode, connector geometry
+    canvas_draw.go     # drawing: notes, regions, connectors, strokes, images, background
+    tools.go           # the tool enum (select, note, region, connector, pen, eraser, image)
+    toolbar.go         # header (identity, board name) and the floating toolbar
+    icons.go           # SVG icons for the toolbar and panels
+    boardlist.go       # board list screen: cards, New board
+    colors.go          # design-system tokens (light/dark, note palette)
+  settings/            # user settings
+    settings.go        # settings.json: theme, font, background, dim, window opacity, last board
+    ui.go              # settings panel (right side)
+  installer/           # Inno Setup script + build instructions
   GOAL.md
   README.md
   docs/
@@ -44,13 +45,13 @@ ideaboard/
   Autosave runs on every change, debounced (~1 s), plus a save on window
   close/quit.
 - **ui package** builds the MyGo native UI view each frame from the board
-  model. One full-window element paints the canvas with a pan/zoom
+  model. The active tool decides what a click does (see `ui/tools.go`). One full-window element paints the canvas with a pan/zoom
   `ui.Transform`. Pointer input is read each frame (`PointerPosition`,
   `PressedButton`, `InputScroll`, `HandleInput`) to pan, zoom, drag notes,
   and double-click to create.
-- **settings package** stores `settings.json` next to the executable (or in
-  the app data folder): theme (light/dark/system), note font family, background
-  image path + dim/blur, window position/size.
+- **settings package** stores `settings.json` in the app data folder: theme
+  (light/dark/system), note font family, background image path + dim, window
+  opacity, window position/size, and the last board opened.
 
 ## Data flow
 

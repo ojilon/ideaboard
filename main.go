@@ -1,8 +1,8 @@
 // IdeaBoard is a quiet, minimal note-board for capturing scattered ideas
 // quickly while reading. Open the app, double-click, type, done.
 //
-// This file is the entry point: it creates the MyGo native-UI window, loads
-// and saves boards through the storage package, and runs the app lifecycle.
+// This file is the entry point. It owns the app shell: the board list, the
+// open board, the settings, and the MyGo window and its lifecycle.
 package main
 
 import (
@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
 	mygo_ui "github.com/egoist/mygo/ui"
 
 	"ideaboard/board"
@@ -22,12 +24,14 @@ import (
 )
 
 type app struct {
-	boardStore  *storage.Store
-	board       *board.Board
-	canvas      *ui.Canvas
-	cfg         settings.Settings
+	store        *storage.Store
+	cfg          settings.Settings
+	bg           mygo_ui.ImageSource // decoded background, shared by boards
+	board        *board.Board        // open board; nil on the board list
+	canvas       *ui.Canvas
+	list         *ui.BoardList
 	showSettings bool
-	win         *mygo.Window
+	win          *mygo.Window
 }
 
 func main() {
@@ -44,48 +48,137 @@ func main() {
 }
 
 func (a *app) start() {
-	a.boardStore = storage.Open(boardsDir())
-	a.canvas = ui.NewCanvas(a.board)
-	a.canvas.OnChange(func() { a.boardStore.Note(a.board) })
-	a.canvas.OnQuit(func() { mygo.App.Quit() })
-	a.canvas.OnAttachImage(func() { a.attachImage(a.win, a.board) })
-	a.canvas.OnSettingsToggle(func() { a.showSettings = !a.showSettings })
-
+	a.store = storage.Open(boardsDir())
 	a.cfg = settings.Load()
 	a.applySettings(a.cfg)
-
-	boards, _ := a.boardStore.ListBoards()
-	name := "Default"
-	if len(boards) > 0 {
-		name = boards[len(boards)-1]
-	}
-	b, err := a.boardStore.LoadBoard(name)
-	if err != nil {
-		b = board.NewBoard(name)
-	}
-	a.board = b
-	// Rebind the canvas to the loaded board (it was created with a placeholder).
-	a.canvas = ui.NewCanvas(b)
-	a.canvas.OnChange(func() { a.boardStore.Note(b) })
-	a.canvas.OnQuit(func() { mygo.App.Quit() })
-	a.canvas.OnAttachImage(func() { a.attachImage(a.win, b) })
-	a.canvas.OnSettingsToggle(func() { a.showSettings = !a.showSettings })
 	if a.cfg.Background != "" {
-		a.loadBackground(a.cfg.Background, a.cfg.BackgroundDim)
+		a.loadBackground(a.cfg.Background)
+	}
+	a.list = &ui.BoardList{
+		OnOpen:     a.openBoard,
+		OnNew:      a.newBoard,
+		OnSettings: a.toggleSettings,
+	}
+
+	// Open the last board when it still exists; otherwise show the list.
+	if a.cfg.LastBoard != "" && a.store.Exists(a.cfg.LastBoard) {
+		a.openBoard(a.cfg.LastBoard)
 	}
 
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:       "IdeaBoard - " + b.Name,
-		Width:       a.cfg.Window.W, Height: a.cfg.Window.H,
-		Transparent: true,
-		Opacity:     0.92,
-		Frameless:   true,
+		Title:        "IdeaBoard",
+		Width:        a.cfg.Window.W,
+		Height:       a.cfg.Window.H,
+		Transparent:  true,
+		Opacity:      float64(a.cfg.WindowOpacity),
+		Frameless:    true,
 		CornerRadius: 8,
-		Content:     mygo_ui.View(a.view),
+		Content:      mygo_ui.View(a.view),
 	})
 	a.win = win
 }
 
+// view builds one frame: the open board, or the board list.
+func (a *app) view(c *mygo_ui.Context) {
+	if a.canvas == nil {
+		a.list.View(c)
+		return
+	}
+	a.canvas.View(c)
+	if a.showSettings {
+		settings.Panel(c, a.cfg, settings.Callbacks{
+			OnTheme:          func(t settings.Theme) { a.cfg.Theme = t; a.applySettings(a.cfg); a.save() },
+			OnFontFamily:     func(f string) { a.cfg.FontFamily = f; a.canvas.SetNoteFont(f); a.save() },
+			OnFontFile:       a.pickFontFile,
+			OnPickBackground: a.pickBackground,
+			OnBackground: func(path string, dim float32) {
+				a.cfg.BackgroundDim = dim
+				if path != a.cfg.Background {
+					a.cfg.Background = path
+					a.bg = nil
+					if path != "" {
+						a.loadBackground(path)
+					}
+				}
+				a.applyBackground()
+				a.save()
+			},
+			OnOpacity: func(o float32) {
+				a.cfg.WindowOpacity = o
+				if a.win != nil {
+					a.win.SetOpacity(float64(o))
+				}
+				a.save()
+			},
+			OnClose: a.toggleSettings,
+		})
+	}
+}
+
+// toggleSettings opens or closes the settings panel.
+func (a *app) toggleSettings() {
+	a.showSettings = !a.showSettings
+	if a.canvas != nil {
+		a.canvas.SetShowSettings(a.showSettings)
+	}
+}
+
+// openBoard saves the open board, then loads and shows the named board.
+func (a *app) openBoard(name string) {
+	a.saveNow()
+	b, err := a.store.LoadBoard(name)
+	if err != nil {
+		log.Printf("ideaboard: open board %q: %v", name, err)
+		return
+	}
+	a.board = b
+	c := ui.NewCanvas(b)
+	c.OnChange(func() { a.store.Note(b) })
+	c.OnAttachImage(a.attachImage)
+	c.OnPaste(a.paste)
+	c.OnSettingsToggle(a.toggleSettings)
+	c.OnBoards(a.closeBoard)
+	c.OnQuit(func() { mygo.App.Quit() })
+	c.SetNoteFont(a.cfg.FontFamily)
+	c.SetAssetLoader(a.assetLoader(name))
+	c.SetBackground(a.bg, a.cfg.BackgroundDim)
+	c.SetShowSettings(a.showSettings)
+	a.canvas = c
+	a.cfg.LastBoard = name
+	a.save()
+}
+
+// closeBoard saves the open board and returns to the board list.
+func (a *app) closeBoard() {
+	a.saveNow()
+	a.board = nil
+	a.canvas = nil
+	a.refreshList()
+}
+
+// newBoard creates an empty board with a free name and opens it.
+func (a *app) newBoard() {
+	name := "Untitled board"
+	for i := 2; a.store.Exists(name); i++ {
+		name = fmt.Sprintf("Untitled board %d", i)
+	}
+	if err := a.store.SaveBoard(board.NewBoard(name)); err != nil {
+		log.Printf("ideaboard: create board %q: %v", name, err)
+		return
+	}
+	a.openBoard(name)
+}
+
+// refreshList reloads the board list from disk.
+func (a *app) refreshList() {
+	infos, err := a.store.ListBoardInfo()
+	if err != nil {
+		log.Printf("ideaboard: list boards: %v", err)
+	}
+	a.list.Infos = infos
+}
+
+// applySettings applies the theme and the note font to the running app.
 func (a *app) applySettings(s settings.Settings) {
 	mygo.Theme.SetSource(mygo.ThemeSource(s.Theme))
 	if s.FontFile != "" {
@@ -100,7 +193,8 @@ func (a *app) applySettings(s settings.Settings) {
 	}
 }
 
-func (a *app) loadBackground(path string, dim float32) {
+// loadBackground decodes the background image. Only PNG and JPEG decode.
+func (a *app) loadBackground(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		log.Printf("ideaboard: read background %q: %v", path, err)
@@ -111,114 +205,193 @@ func (a *app) loadBackground(path string, dim float32) {
 		log.Printf("ideaboard: decode background %q: %v", path, err)
 		return
 	}
-	a.canvas.SetBackground(src, dim)
+	a.bg = src
 }
 
-func (a *app) view(c *mygo_ui.Context) {
-	a.canvas.View(c)
-	if a.showSettings {
-		settings.Panel(c, a.cfg, settings.Callbacks{
-			OnTheme:      func(t settings.Theme) { a.cfg.Theme = t; a.applySettings(a.cfg); settings.Save(a.cfg) },
-			OnFontFamily: func(f string) { a.cfg.FontFamily = f; settings.Save(a.cfg) },
-			OnFontFile:   func(f string) { a.pickFontFile() },
-			OnBackground: func(path string, dim float32) {
-				a.cfg.Background = path
-				a.cfg.BackgroundDim = dim
-				a.loadBackground(path, dim)
-				settings.Save(a.cfg)
-			},
-			OnClose: func() { a.showSettings = false },
-		})
+// applyBackground hands the current background to the open board.
+func (a *app) applyBackground() {
+	if a.canvas != nil {
+		a.canvas.SetBackground(a.bg, a.cfg.BackgroundDim)
 	}
 }
 
+// pickBackground asks for a background image and uses it.
+func (a *app) pickBackground() {
+	path := a.pickFile("Choose background", "Images", []string{"png", "jpg", "jpeg"}, "image/*")
+	if path == "" {
+		return
+	}
+	a.cfg.Background = path
+	a.bg = nil
+	a.loadBackground(path)
+	a.applyBackground()
+	a.save()
+}
+
+// pickFontFile asks for a font file and uses it for note text.
 func (a *app) pickFontFile() {
+	path := a.pickFile("Choose font", "Fonts", []string{"ttf", "otf"}, "font/*")
+	if path == "" {
+		return
+	}
+	a.cfg.FontFile = path
+	a.cfg.FontFamily = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	a.applySettings(a.cfg)
+	if a.canvas != nil {
+		a.canvas.SetNoteFont(a.cfg.FontFamily)
+	}
+	a.save()
+}
+
+// pickFile shows an open dialog and returns the first path, or "".
+func (a *app) pickFile(title, filterName string, exts []string, mime string) string {
 	if a.win == nil {
+		return ""
+	}
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Parent:  a.win,
+		Title:   title,
+		Filters: []mygo.FileFilter{{Name: filterName, Extensions: exts, MIMETypes: []string{mime}}},
+	})
+	if err != nil || len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
+}
+
+// attachImage asks for image files and adds each one to the open board.
+func (a *app) attachImage() {
+	if a.canvas == nil || a.win == nil {
 		return
 	}
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 		Parent: a.win,
-		Title:  "Choose font",
-		Filters: []mygo.FileFilter{
-			{Name: "Fonts", Extensions: []string{"ttf", "otf"}, MIMETypes: []string{"font/*"}},
-		},
-	})
-	if err != nil || len(paths) == 0 {
-		return
-	}
-	a.cfg.FontFile = paths[0]
-	a.cfg.FontFamily = filepath.Base(paths[0])
-	a.applySettings(a.cfg)
-	settings.Save(a.cfg)
-}
-
-func (a *app) attachImage(win *mygo.Window, b *board.Board) {
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Parent: win,
 		Title:  "Attach image",
 		Filters: []mygo.FileFilter{
-			{Name: "Images", Extensions: []string{"png", "jpg", "jpeg", "webp", "gif"}, MIMETypes: []string{"image/*"}},
+			{Name: "Images", Extensions: []string{"png", "jpg", "jpeg"}, MIMETypes: []string{"image/*"}},
 		},
 	})
-	if err != nil || len(paths) == 0 {
+	if err != nil {
 		return
 	}
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
 		if err != nil {
-			log.Printf("ideaboard: read image %q: %v", path, err)
+			log.Printf("ideaboard: read image %q: %v", p, err)
 			continue
+		}
+		a.addImage(data, filepath.Ext(p))
+	}
+}
+
+// paste adds an image from the clipboard: bitmap data first, then copied files.
+func (a *app) paste() {
+	if a.canvas == nil {
+		return
+	}
+	if data, err := mygo.Clipboard.ReadFormat(transfer.PNG); err == nil && len(data) > 0 {
+		a.addImage(data, ".png")
+		return
+	}
+	files, err := mygo.Clipboard.ReadFiles()
+	if err != nil {
+		return
+	}
+	for _, p := range files {
+		ext := strings.ToLower(filepath.Ext(p))
+		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
+			continue
+		}
+		if data, err := os.ReadFile(p); err == nil {
+			a.addImage(data, ext)
+		}
+	}
+}
+
+// addImage stores image bytes as a new asset of the open board and places
+// the image in the middle of the view, scaled down to at most 320 wide.
+func (a *app) addImage(data []byte, ext string) {
+	if a.canvas == nil || a.board == nil {
+		return
+	}
+	src, err := mygo_ui.DecodeImage(data)
+	if err != nil {
+		log.Printf("ideaboard: decode image: %v", err)
+		return
+	}
+	dir, err := a.store.AssetsDir(a.board.Name)
+	if err != nil {
+		log.Printf("ideaboard: assets dir: %v", err)
+		return
+	}
+	ext = strings.ToLower(ext)
+	if ext == "" {
+		ext = ".png"
+	}
+	assetID := fmt.Sprintf("img_%d%s", time.Now().UnixNano(), ext)
+	if err := os.WriteFile(filepath.Join(dir, assetID), data, 0o644); err != nil {
+		log.Printf("ideaboard: write image asset %q: %v", assetID, err)
+		return
+	}
+	w, h := mygo_ui.ImageSize(src)
+	if w <= 0 || h <= 0 {
+		w, h = 240, 180
+	}
+	if w > 320 {
+		h *= 320 / w
+		w = 320
+	}
+	cx, cy := a.canvas.ViewCenter()
+	a.canvas.AddImage(assetID, &board.Item{
+		X: cx - w/2, Y: cy - h/2, W: w, H: h,
+		Fit: "contain",
+	}, src)
+}
+
+// assetLoader reads an image asset of a board from disk.
+func (a *app) assetLoader(name string) func(asset string) mygo_ui.ImageSource {
+	return func(asset string) mygo_ui.ImageSource {
+		dir, err := a.store.AssetsDir(name)
+		if err != nil {
+			return nil
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.Base(asset)))
+		if err != nil {
+			log.Printf("ideaboard: read asset %q: %v", asset, err)
+			return nil
 		}
 		src, err := mygo_ui.DecodeImage(data)
 		if err != nil {
-			log.Printf("ideaboard: decode image %q: %v", path, err)
-			continue
+			log.Printf("ideaboard: decode asset %q: %v", asset, err)
+			return nil
 		}
-		assetsDir, err := a.boardStore.AssetsDir(b.Name)
-		if err != nil {
-			log.Printf("ideaboard: assets dir %q: %v", b.Name, err)
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext == "" {
-			ext = ".png"
-		}
-		assetID := "img_" + strings.TrimSuffix(filepath.Base(path), ext) + ext
-		if _, err := os.Stat(filepath.Join(assetsDir, assetID)); err == nil {
-			assetID = "img_" + strings.TrimSuffix(filepath.Base(path), ext) + "_" + fmt.Sprint(len(b.Items())) + ext
-		}
-		if err := os.WriteFile(filepath.Join(assetsDir, assetID), data, 0o644); err != nil {
-			log.Printf("ideaboard: write image asset %q: %v", assetID, err)
-			continue
-		}
-		w, h := mygo_ui.ImageSize(src)
-		if w <= 0 || h <= 0 {
-			w, h = 240, 180
-		}
-		maxW := float32(320)
-		scale := float32(1)
-		if w > maxW {
-			scale = maxW / w
-		}
-		dw, dh := float32(w)*scale, float32(h)*scale
-		bx := a.canvas.PanX() + 100
-		by := a.canvas.PanY() + 60
-		a.canvas.AddImage(assetID, &board.Item{
-			Kind:   board.KindImage,
-			X:      bx, Y: by,
-			W:      dw, H: dh,
-			Color:  "", Asset: assetID, Fit: "contain",
-		}, src)
+		return src
 	}
 }
 
+// save writes the settings file.
+func (a *app) save() {
+	if err := settings.Save(a.cfg); err != nil {
+		log.Printf("ideaboard: save settings: %v", err)
+	}
+}
+
+// saveNow flushes the open board and the settings, including window size.
 func (a *app) saveNow() {
-	if a.boardStore != nil && a.board != nil {
-		if err := a.boardStore.SaveNow(a.board); err != nil {
+	if a.win != nil {
+		w, h := a.win.Size()
+		x, y := a.win.Position()
+		if w > 0 && h > 0 {
+			a.cfg.Window.X, a.cfg.Window.Y = x, y
+			a.cfg.Window.W, a.cfg.Window.H = w, h
+		}
+	}
+	if a.store != nil && a.board != nil {
+		if err := a.store.SaveNow(a.board); err != nil {
 			log.Printf("ideaboard: board save failed: %v", err)
 		}
 	}
-	settings.Save(a.cfg)
+	a.save()
 }
 
 func boardsDir() string {

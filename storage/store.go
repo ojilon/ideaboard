@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"ideaboard/board"
@@ -26,23 +27,23 @@ const DefaultSaveDebounce = time.Second
 
 // fileItem is the on-disk form of a board.Item.
 type fileItem struct {
-	ID     string   `json:"id"`
-	Kind   string   `json:"kind"`
-	X      float32  `json:"x"`
-	Y      float32  `json:"y"`
-	W      float32  `json:"w"`
-	H      float32  `json:"h"`
-	Color  string   `json:"color"`
-	Z      int      `json:"z"`
-	Text   string   `json:"text,omitempty"`
-	FontSize float32 `json:"fontSize,omitempty"`
-	Label  string   `json:"label,omitempty"`
-	From   string   `json:"from,omitempty"`
-	To     string   `json:"to,omitempty"`
-	Points [][2]float32 `json:"points,omitempty"`
-	Width  float32 `json:"width,omitempty"`
-	Asset  string   `json:"asset,omitempty"`
-	Fit    string   `json:"fit,omitempty"`
+	ID       string       `json:"id"`
+	Kind     string       `json:"kind"`
+	X        float32      `json:"x"`
+	Y        float32      `json:"y"`
+	W        float32      `json:"w"`
+	H        float32      `json:"h"`
+	Color    string       `json:"color"`
+	Z        int          `json:"z"`
+	Text     string       `json:"text,omitempty"`
+	FontSize float32      `json:"fontSize,omitempty"`
+	Label    string       `json:"label,omitempty"`
+	From     string       `json:"from,omitempty"`
+	To       string       `json:"to,omitempty"`
+	Points   [][2]float32 `json:"points,omitempty"`
+	Width    float32      `json:"width,omitempty"`
+	Asset    string       `json:"asset,omitempty"`
+	Fit      string       `json:"fit,omitempty"`
 }
 
 type fileView struct {
@@ -66,13 +67,13 @@ func EncodeBoard(b *board.Board) boardFile {
 	f.Items = make([]fileItem, 0, len(items))
 	for _, it := range items {
 		fi := fileItem{
-			ID:      it.ID,
-			Kind:    string(it.Kind),
-			X:       it.X, Y: it.Y, W: it.W, H: it.H,
-			Color:   it.Color, Z: it.Z,
-			Text:    it.Text, FontSize: it.FontSize,
-			Label:   it.Label, From: it.From, To: it.To,
-			Width:   it.Width, Asset: it.Asset, Fit: it.Fit,
+			ID:   it.ID,
+			Kind: string(it.Kind),
+			X:    it.X, Y: it.Y, W: it.W, H: it.H,
+			Color: it.Color, Z: it.Z,
+			Text: it.Text, FontSize: it.FontSize,
+			Label: it.Label, From: it.From, To: it.To,
+			Width: it.Width, Asset: it.Asset, Fit: it.Fit,
 		}
 		if len(it.Points) > 0 {
 			fi.Points = make([][2]float32, len(it.Points))
@@ -93,13 +94,13 @@ func DecodeBoard(f boardFile) *board.Board {
 	}
 	for _, fi := range f.Items {
 		it := &board.Item{
-			ID:      fi.ID,
-			Kind:    board.Kind(fi.Kind),
-			X:       fi.X, Y: fi.Y, W: fi.W, H: fi.H,
-			Color:   fi.Color, Z: fi.Z,
-			Text:    fi.Text, FontSize: fi.FontSize,
-			Label:   fi.Label, From: fi.From, To: fi.To,
-			Width:   fi.Width, Asset: fi.Asset, Fit: fi.Fit,
+			ID:   fi.ID,
+			Kind: board.Kind(fi.Kind),
+			X:    fi.X, Y: fi.Y, W: fi.W, H: fi.H,
+			Color: fi.Color, Z: fi.Z,
+			Text: fi.Text, FontSize: fi.FontSize,
+			Label: fi.Label, From: fi.From, To: fi.To,
+			Width: fi.Width, Asset: fi.Asset, Fit: fi.Fit,
 		}
 		if len(fi.Points) > 0 {
 			it.Points = make([][2]float32, len(fi.Points))
@@ -115,7 +116,7 @@ func DecodeBoard(f boardFile) *board.Board {
 
 // Store persists boards to a boards directory.
 type Store struct {
-	dir     string
+	dir      string
 	debounce time.Duration
 	timer    *time.Timer
 	pending  *board.Board
@@ -246,3 +247,32 @@ func (s *Store) SaveNow(b *board.Board) error {
 	return s.SaveBoard(b)
 }
 
+// BoardInfo describes a board on disk for the board list.
+type BoardInfo struct {
+	Name     string
+	Modified time.Time
+}
+
+// ListBoardInfo returns every board with its last-saved time, newest first.
+func (s *Store) ListBoardInfo() ([]BoardInfo, error) {
+	names, err := s.ListBoards()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BoardInfo, 0, len(names))
+	for _, n := range names {
+		fi, err := os.Stat(filepath.Join(s.dirFor(n), "board.json"))
+		if err != nil {
+			continue
+		}
+		out = append(out, BoardInfo{Name: n, Modified: fi.ModTime()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
+	return out, nil
+}
+
+// Exists reports whether a board with this name is on disk.
+func (s *Store) Exists(name string) bool {
+	_, err := os.Stat(filepath.Join(s.dirFor(name), "board.json"))
+	return err == nil
+}
