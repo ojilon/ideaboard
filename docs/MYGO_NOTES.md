@@ -6,34 +6,30 @@ the system webview or **native UI drawn by MyGo itself** (package `ui`, on the
 GPU where possible). This app uses native UI: low memory, instant window open,
 no HTML/JavaScript.
 
-## What MyGo supports (confirmed by reading source)
+## What MyGo supports (confirmed by reading source + running the app)
 
-- **Windows:** `mygo.NewWindow(mygo.WindowOptions{...})` with native UI
-  `Content: ui.View(app.view)`; the view function runs on the main thread each
-  frame.
-- **Transparency / opacity:** `WindowOptions.Transparent` (window background
-  transparent), `WindowOptions.Opacity` (0–1), `WindowOptions.CornerRadius`
-  (frameless windows), `WindowOptions.Frameless` (no title bar/chrome),
-  `WindowOptions.Panel` (floats above other windows, no taskbar entry).
-- **2D drawing:** `ui.Painter` with `Fill`, `Stroke`, `StrokeDashed`,
-  `FillPath`, `StrokePath`, `Line`, `Text`, `Image`, `ImageRegion`, `Clip`,
-  `Transform` (pan/zoom via `ui.Translation`, `ui.Scaling`).
-- **Input:** `Element.HandleInput` / `ObserveInput` with `InputEvent`
-  (pointer down/up/move, scroll, zoom, keys); `Element.PointerPosition()`,
-  `PressedButton()`, `PressedPointer()`; `Context.Shortcut`/`OnShortcut` for
-  keys; `InputScroll` with `Ctrl` mod (Windows Ctrl+wheel) and `InputZoom`.
-- **Text input:** `ui.TextArea` / `ui.TextInput` for in-place note editing.
-- **Images:** `ui.DecodeImage(data []byte) (ImageSource, error)` to load PNG
-  / JPG / etc. from bytes into a `ui.Bitmap`; `ui.RegisterFont` for custom
-  fonts.
-- **Themes:** `c.Theme()` light/dark (system-following by default), theme
-  colors (Background, Surface, Border, Text, TextMuted, Accent, …).
-- **Desktop APIs:** clipboard, dialogs, menus, tray, notifications, window
-  state, screens.
-- **No cgo:** builds with `CGO_ENABLED=0` from any machine; single Go binary
-  of a few MB.
-- **Installer:** MyGo has app-bundling (`mygo build`) for macOS/Linux, but no
-  Windows installer baked in — we add an Inno Setup script in `installer/`.
+- **Windows native UI:** `mygo.NewWindow` with `Content: ui.View(...)`, view
+  runs on the main thread each frame. `Transparent` + `Opacity` + `Frameless`
+  + `CornerRadius` all work (frameless transparent window opens on Windows).
+- **2D drawing:** `ui.Painter.Fill`, `Stroke`, `StrokeDashed`, `Line`,
+  `TextLayout` (via `ui.ShapeText`), `Image`, `Clip`, `Transform`
+  (`ui.Translation`, `ui.Scaling`). Pan/zoom canvas confirmed working.
+- **Input:** `Element.HandleInput` with `InputEvent` (pointer down/up/move,
+  scroll with `Ctrl` mod = zoom, keys); `ctx.Invalidate()` from any goroutine.
+  Confirmed: middle-drag/space+drag pan, ctrl+scroll zoom, double-click create,
+  drag/resize notes, delete.
+- **Text input:** `ui.TextArea(ctx, &value)` for in-place note editing, with
+  `OnShortcut` (Escape commits). Confirmed working.
+- **Quit hook:** `mygo.App.OnWillQuit` for save-on-quit. Confirmed working.
+- **Images:** `ui.DecodeImage(data []byte) (ImageSource, error)` loads PNG/JPG
+  into a `ui.Bitmap` (not yet wired into the app). `ui.RegisterFont` for
+  custom fonts.
+- **Themes:** `c.Theme()` light/dark, colors (Background, Surface, Border,
+  Text, TextMuted, Accent).
+- **Menus:** `ui.PopoverMenu` / `ui.Menu` available (not yet used).
+- **No cgo:** builds with `CGO_ENABLED=0`; single Go binary of a few MB.
+- **Installer:** MyGo has app-bundling for macOS/Linux, but no Windows
+  installer baked in — we add an Inno Setup script in `installer/`.
 
 ## Limits / things MyGo cannot (or does not obviously) do
 

@@ -71,3 +71,44 @@ func TestCanvasCreateNoteTriggersAutosave(t *testing.T) {
 		t.Fatalf("expected empty board on disk, got %d", len(loaded.Items()))
 	}
 }
+
+func TestCanvasRegionAndConnector(t *testing.T) {
+	b := board.NewBoard("T")
+	c := NewCanvas(b)
+
+	// two notes
+	if !c.input(nil, pointerDown(0, 100, 100, 2)) {
+		t.Fatal("create note 1")
+	}
+	if !c.input(nil, pointerDown(0, 400, 100, 2)) {
+		t.Fatal("create note 2")
+	}
+	if len(b.Items()) != 2 {
+		t.Fatalf("expected 2 notes, got %d", len(b.Items()))
+	}
+	n1, n2 := b.Items()[0], b.Items()[1]
+
+	// region via 'r'
+	if !c.input(nil, keyDown(ui.KeyR)) {
+		t.Fatal("add region not taken")
+	}
+	if len(b.Items()) != 3 {
+		t.Fatalf("expected 3 items after region, got %d", len(b.Items()))
+	}
+	reg := b.Items()[2]
+	if reg.Kind != board.KindRegion || reg.Label != "Mon" {
+		t.Fatalf("bad region: %+v", reg)
+	}
+
+	// connector via 'c' between the two notes
+	if !c.input(nil, keyDown(ui.KeyC)) {
+		t.Fatal("add connector not taken")
+	}
+	if len(b.Items()) != 4 {
+		t.Fatalf("expected 4 items after connector, got %d", len(b.Items()))
+	}
+	con := b.Items()[3]
+	if con.Kind != board.KindConnector || con.From != n1.ID || con.To != n2.ID {
+		t.Fatalf("bad connector: %+v", con)
+	}
+}

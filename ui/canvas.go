@@ -4,6 +4,9 @@
 package ui
 
 import (
+	"math"
+	"sort"
+
 	"ideaboard/board"
 
 	"github.com/egoist/mygo/ui"
@@ -45,6 +48,9 @@ type Canvas struct {
 	// colorPickX/Y is where to show the color picker overlay, in window coords.
 	colorPickX, colorPickY float32
 
+	// curTheme is the theme of the current frame (set in View).
+	curTheme *ui.Theme
+
 	// onChange is called whenever the board changes (to trigger autosave).
 	onChange func()
 	// onQuit is called when the user asks to close the app (Escape).
@@ -70,6 +76,7 @@ func (c *Canvas) changed() {
 
 // View builds the canvas element for one frame.
 func (c *Canvas) View(ctx *ui.Context) ui.Element {
+	c.curTheme = ctx.Theme()
 	box := ui.Box(ctx).Fill().
 		Background(boardColor(ctx)).
 		Draw(func(p *ui.Painter, r ui.Rect) {
@@ -137,10 +144,7 @@ func (c *Canvas) colorSwatch(ctx *ui.Context, it *board.Item, col string) {
 }
 
 func boardColor(ctx *ui.Context) ui.Color {
-	if ctx.Theme() != nil {
-		return ctx.Theme().Background
-	}
-	return ui.RGB(245, 245, 247)
+	return canvasColor(ctx.Theme())
 }
 
 // boardNote returns the note with the given id, or nil.
@@ -161,6 +165,54 @@ func (c *Canvas) nearCorner(it *board.Item, bx, by float32) bool {
 	return bx >= it.X+it.W-8 && bx <= it.X+it.W && by >= it.Y+it.H-8 && by <= it.Y+it.H
 }
 
+func (c *Canvas) drawRegion(p *ui.Painter, it *board.Item) {
+	th := c.curTheme
+	r := ui.Rect{it.X, it.Y, it.W, it.H}
+	col := regionColor(th)
+	// Dotted outline, 1-1.5 px.
+	p.StrokeDashed(r, col, 4, 1)
+	// Label inside the upper-left boundary.
+	if it.Label != "" {
+		layout := ui.ShapeText(it.Label, ui.Font{Size: 14}, max(it.W-32, 0))
+		p.TextLayout(layout, it.X+12, it.Y+12, col)
+	}
+}
+
+func (c *Canvas) drawConnector(p *ui.Painter, it *board.Item) {
+	th := c.curTheme
+	from := c.boardNote(it.From)
+	to := c.boardNote(it.To)
+	if from == nil || to == nil {
+		return
+	}
+	// A dotted line between the two note centers; it follows the notes
+	// because endpoints are recomputed from their positions every frame.
+	x0, y0 := from.X+from.W/2, from.Y+from.H/2
+	x1, y1 := to.X+to.W/2, to.Y+to.H/2
+	c.drawDashedLine(p, x0, y0, x1, y1, 1.5, connectorColor(th))
+}
+
+func (c *Canvas) drawDashedLine(p *ui.Painter, x0, y0, x1, y1, width float32, col ui.Color) {
+	dx, dy := x1-x0, y1-y0
+	length := float32(0)
+	if dx != 0 || dy != 0 {
+		length = float32(math.Sqrt(float64(dx*dx + dy*dy)))
+	}
+	if length == 0 {
+		return
+	}
+	ux, uy := dx/length, dy/length
+	dash, gap := float32(6), float32(4)
+	for d := float32(0); d < length; d += dash + gap {
+		d0 := d
+		d1 := min(d+dash, length)
+		p.Line(x0+ux*d0, y0+uy*d0, x0+ux*d1, y0+uy*d1, width, col)
+	}
+}
+
+func (c *Canvas) drawStroke(p *ui.Painter, it *board.Item) {}
+func (c *Canvas) drawImage(p *ui.Painter, it *board.Item) {}
+
 // softColors are the few note colors offered.
 var softColors = []string{
 	"#fff59d", // soft yellow
@@ -177,11 +229,23 @@ func (c *Canvas) drawBoard(p *ui.Painter, r ui.Rect) {
 	t := ui.Translation(-c.panX, -c.panY).Then(ui.Scaling(c.zoom, c.zoom))
 	p.Transform(t, 0, 0, func() {
 		c.drawGrid(p, r)
-		for _, l := range c.board.Layers {
-			for _, it := range l.Items {
-				if it.Kind == board.KindNote {
-					c.drawNote(p, it)
-				}
+		items := c.board.Items()
+		// Draw in z-order so regions sit behind notes and connectors follow.
+		sorted := make([]*board.Item, len(items))
+		copy(sorted, items)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Z < sorted[j].Z })
+		for _, it := range sorted {
+			switch it.Kind {
+			case board.KindNote:
+				c.drawNote(p, it)
+			case board.KindRegion:
+				c.drawRegion(p, it)
+			case board.KindConnector:
+				c.drawConnector(p, it)
+			case board.KindStroke:
+				c.drawStroke(p, it)
+			case board.KindImage:
+				c.drawImage(p, it)
 			}
 		}
 	})
@@ -209,10 +273,11 @@ func floorTo(v, step float32) float32 {
 }
 
 func (c *Canvas) drawNote(p *ui.Painter, it *board.Item) {
-	col := noteColor(it.Color)
+	col := noteFill(it.Color)
 	r := ui.Rect{it.X, it.Y, it.W, it.H}
+	th := c.curTheme
 	if c.selected == it.ID {
-		p.Stroke(r, ui.RGB(59, 130, 246), 4, 1.5)
+		p.Stroke(r, th.Accent, 6, 1.5)
 	}
 	p.Fill(r, col, 6)
 	// Resize handle on the selected note's bottom-right corner.
@@ -223,26 +288,11 @@ func (c *Canvas) drawNote(p *ui.Painter, it *board.Item) {
 	if it.Text != "" {
 		font := ui.Font{Size: it.FontSize}
 		if font.Size == 0 {
-			font.Size = 14
+			font.Size = 16
 		}
-		layout := ui.ShapeText(it.Text, font, it.W-16)
-		p.TextLayout(layout, it.X+8, it.Y+8, textColor())
+		layout := ui.ShapeText(it.Text, font, max(it.W-32, 40))
+		p.TextLayout(layout, it.X+16, it.Y+16, inkColor(th))
 	}
-}
-
-func noteColor(s string) ui.Color {
-	if s == "" {
-		return ui.RGB(255, 245, 157) // soft yellow
-	}
-	col := ui.Hex(s)
-	if col == (ui.Color{}) {
-		return ui.RGB(255, 245, 157)
-	}
-	return col
-}
-
-func textColor() ui.Color {
-	return ui.RGB(35, 35, 40)
 }
 
 

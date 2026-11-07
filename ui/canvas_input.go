@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	noteMinW float32 = 140
-	noteMinH float32 = 100
+	noteMinW float32 = 180
+	noteMinH float32 = 112
 )
 
 // input turns pointer and key events into pan, zoom and note interaction.
@@ -45,6 +45,15 @@ func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
 				c.changed()
 				return true
 			}
+		}
+		// Shortcuts: R = add a region, C = connect the first two notes.
+		if ev.Key == ui.KeyR {
+			c.addRegion()
+			return true
+		}
+		if ev.Key == ui.KeyC {
+			c.addConnector()
+			return true
 		}
 	case ui.InputKeyUp:
 		if ev.Key == ui.KeySpace {
@@ -242,11 +251,55 @@ func (c *Canvas) createNote(bx, by float32) {
 		Y:        by - h/2,
 		W:        w,
 		H:        h,
-		Color:    "#fff59d",
+		Color:    "#FFF4C7", // design system note-yellow
 		Text:     "",
 		FontSize: 16,
 	})
 	c.changed()
+}
+
+// addRegion places a labeled dotted region at the board center of the view.
+func (c *Canvas) addRegion() {
+	c.board.AddItem(&board.Item{
+		Kind:   board.KindRegion,
+		X:      c.panX + 100,
+		Y:      c.panY + 60,
+		W:      320,
+		H:      200,
+		Color:  "", // design-system region outline color
+		Label:  "Mon",
+		FontSize: 0,
+	})
+	c.changed()
+}
+
+// addConnector draws a dotted line between the first two notes on the board.
+func (c *Canvas) addConnector() {
+	notes := c.notes()
+	if len(notes) < 2 {
+		return
+	}
+	c.board.AddItem(&board.Item{
+		Kind:   board.KindConnector,
+		X:      0, Y: 0, W: 0, H: 0,
+		Color:  "",
+		From:   notes[0].ID,
+		To:     notes[1].ID,
+		FontSize: 0,
+	})
+	c.changed()
+}
+
+func (c *Canvas) notes() []*board.Item {
+	var out []*board.Item
+	for _, l := range c.board.Layers {
+		for _, it := range l.Items {
+			if it.Kind == board.KindNote {
+				out = append(out, it)
+			}
+		}
+	}
+	return out
 }
 
 // beginEdit starts in-place editing of a note.
