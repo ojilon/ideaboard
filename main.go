@@ -10,22 +10,24 @@ import (
 	"log"
 
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
+	mygo_ui "github.com/egoist/mygo/ui"
+
+	"ideaboard/board"
+	"ideaboard/ui"
 )
 
-type app struct{}
+type app struct {
+	canvas *ui.Canvas
+}
 
 // view builds the window's interface from the app state, each frame.
-func (a *app) view(c *ui.Context) {
-	ui.Column(c).Fill().Gap(24).Children(func() {
-		ui.Text(c, "IdeaBoard").FontSize(34).Bold()
-		ui.Text(c, "Double-click empty space to create a note.").
-			FontSize(14).TextColor(c.Theme().TextMuted)
-	})
+func (a *app) view(c *mygo_ui.Context) {
+	a.canvas.View(c)
 }
 
 func main() {
-	a := &app{}
+	b := board.NewBoard("Default")
+	a := &app{canvas: ui.NewCanvas(b)}
 	mygo.App.WhenReady(func() {
 		mygo.NewWindow(mygo.WindowOptions{
 			Title:       "IdeaBoard",
@@ -35,7 +37,7 @@ func main() {
 			Opacity:     0.92,
 			Frameless:   true,
 			CornerRadius: 8,
-			Content:     ui.View(a.view),
+			Content:     mygo_ui.View(a.view),
 		})
 	})
 	if err := mygo.App.Run(); err != nil {
