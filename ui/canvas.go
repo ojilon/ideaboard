@@ -61,17 +61,28 @@ type Canvas struct {
 	// imageCache holds decoded images by asset id.
 	imageCache map[string]ui.ImageSource
 
+	// bgImage is the optional user-chosen background image, drawn behind the
+	// canvas grid.
+	bgImage ui.ImageSource
+	// bgDim dims the background image (0 = no dim, 1 = fully dimmed).
+	bgDim float32
+
 	// onChange is called whenever the board changes (to trigger autosave).
 	onChange func()
 
 	// onAttachImage opens an image file and attaches it to the board.
 	onAttachImage func()
+	// onSettingsToggle opens/closes the settings panel.
+	onSettingsToggle func()
 	// onQuit is called when the user asks to close the app (Escape).
 	onQuit func()
 }
 
 // OnAttachImage sets the attach-image hook.
 func (c *Canvas) OnAttachImage(fn func()) { c.onAttachImage = fn }
+
+// OnSettingsToggle sets the settings-toggle hook.
+func (c *Canvas) OnSettingsToggle(fn func()) { c.onSettingsToggle = fn }
 
 // NewCanvas makes a canvas showing b.
 func NewCanvas(b *board.Board) *Canvas {
@@ -81,6 +92,13 @@ func NewCanvas(b *board.Board) *Canvas {
 // PanX and PanY return the board coords of the window's top-left.
 func (c *Canvas) PanX() float32 { return c.panX }
 func (c *Canvas) PanY() float32 { return c.panY }
+
+// SetBackground sets the optional user-chosen background image and its dim.
+func (c *Canvas) SetBackground(src ui.ImageSource, dim float32) {
+	c.bgImage = src
+	c.bgDim = dim
+	c.changed()
+}
 
 // OnChange sets the change hook.
 func (c *Canvas) OnChange(fn func()) { c.onChange = fn }
@@ -289,6 +307,18 @@ var softColors = []string{
 // the sticky notes.
 func (c *Canvas) drawBoard(p *ui.Painter, r ui.Rect) {
 	t := ui.Translation(-c.panX, -c.panY).Then(ui.Scaling(c.zoom, c.zoom))
+	// Background image (window space, behind the grid), stretched to cover.
+	if c.bgImage != nil {
+		p.Image(c.bgImage, r, ui.Cover)
+		if c.bgDim > 0 {
+			dimCol := ui.RGBA(0, 0, 0, c.bgDim)
+			if c.curTheme != nil && luminance(c.curTheme.Background) > 127 {
+				dimCol = ui.RGBA(255, 255, 255, c.bgDim)
+			}
+			p.Fill(r, dimCol, 0)
+		}
+	}
+
 	p.Transform(t, 0, 0, func() {
 		c.drawGrid(p, r)
 		items := c.board.Items()

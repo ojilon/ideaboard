@@ -63,6 +63,12 @@ func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
 			c.redo()
 			return true
 		}
+		if ev.Mods&ui.Ctrl != 0 && ev.Key == ui.KeyComma {
+			if c.onSettingsToggle != nil {
+				c.onSettingsToggle()
+				return true
+			}
+		}
 	case ui.InputKeyUp:
 		if ev.Key == ui.KeySpace {
 			c.spaceHeld = false

@@ -105,3 +105,8 @@ func inkColor(th *ui.Theme) ui.Color {
 func mutedColor(th *ui.Theme) ui.Color {
 	return paletteFor(th).inkSecond
 }
+
+// luminance returns the perceived brightness of a color, 0..255.
+func luminance(c ui.Color) float64 {
+	return 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
+}
