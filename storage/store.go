@@ -137,6 +137,15 @@ func (s *Store) OnSave(fn func(err error)) { s.onSave = fn }
 // dirFor returns the folder for a board.
 func (s *Store) dirFor(name string) string { return filepath.Join(s.dir, name) }
 
+// AssetsDir returns the board's assets folder, creating it if needed.
+func (s *Store) AssetsDir(name string) (string, error) {
+	d := filepath.Join(s.dirFor(name), "assets")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		return "", err
+	}
+	return d, nil
+}
+
 // ListBoards returns the names of all boards (subdirectories containing a
 // board.json), sorted.
 func (s *Store) ListBoards() ([]string, error) {

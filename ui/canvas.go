@@ -51,16 +51,36 @@ type Canvas struct {
 	// curTheme is the theme of the current frame (set in View).
 	curTheme *ui.Theme
 
+	// Pen tool (freehand drawing).
+	penActive bool
+	penPoints [][2]float32 // board coords of the stroke being drawn
+
+	// Undo/redo stacks for strokes (stroke items, most recent last).
+	undone []*board.Item
+
+	// imageCache holds decoded images by asset id.
+	imageCache map[string]ui.ImageSource
+
 	// onChange is called whenever the board changes (to trigger autosave).
 	onChange func()
+
+	// onAttachImage opens an image file and attaches it to the board.
+	onAttachImage func()
 	// onQuit is called when the user asks to close the app (Escape).
 	onQuit func()
 }
 
+// OnAttachImage sets the attach-image hook.
+func (c *Canvas) OnAttachImage(fn func()) { c.onAttachImage = fn }
+
 // NewCanvas makes a canvas showing b.
 func NewCanvas(b *board.Board) *Canvas {
-	return &Canvas{board: b, zoom: 1}
+	return &Canvas{board: b, zoom: 1, imageCache: map[string]ui.ImageSource{}}
 }
+
+// PanX and PanY return the board coords of the window's top-left.
+func (c *Canvas) PanX() float32 { return c.panX }
+func (c *Canvas) PanY() float32 { return c.panY }
 
 // OnChange sets the change hook.
 func (c *Canvas) OnChange(fn func()) { c.onChange = fn }
@@ -210,8 +230,50 @@ func (c *Canvas) drawDashedLine(p *ui.Painter, x0, y0, x1, y1, width float32, co
 	}
 }
 
-func (c *Canvas) drawStroke(p *ui.Painter, it *board.Item) {}
-func (c *Canvas) drawImage(p *ui.Painter, it *board.Item) {}
+func (c *Canvas) drawStroke(p *ui.Painter, it *board.Item) {
+	if len(it.Points) == 0 {
+		return
+	}
+	// Eraser strokes punch out by drawing with the canvas color over the
+	// board; pen strokes draw in the stroke color.
+	col := noteFill(it.Color)
+	if it.Width == 0 {
+		it.Width = 2
+	}
+	if eraser(it) {
+		col = boardColorTheme(c.curTheme)
+	}
+	pts := make([][2]float32, len(it.Points))
+	copy(pts, it.Points)
+	p.StrokePolyline(pts, it.Width, col)
+}
+
+func boardColorTheme(th *ui.Theme) ui.Color { return canvasColor(th) }
+
+func eraser(it *board.Item) bool { return it.Color == "_eraser" }
+
+func (c *Canvas) drawImage(p *ui.Painter, it *board.Item) {
+	src := c.imageCache[it.Asset]
+	if src == nil {
+		return
+	}
+	fit := ui.Contain
+	if it.Fit == "cover" {
+		fit = ui.Cover
+	}
+	p.Image(src, ui.Rect{it.X, it.Y, it.W, it.H}, fit)
+}
+
+// AddImage decodes and caches an image by asset id and adds it as a board
+// item. The caller owns placing the item (position/size) before calling.
+func (c *Canvas) AddImage(assetID string, it *board.Item, src ui.ImageSource) {
+	if src == nil {
+		return
+	}
+	c.imageCache[assetID] = src
+	c.board.AddItem(it)
+	c.changed()
+}
 
 // softColors are the few note colors offered.
 var softColors = []string{

@@ -46,13 +46,21 @@ func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
 				return true
 			}
 		}
-		// Shortcuts: R = add a region, C = connect the first two notes.
+		// Shortcuts.
 		if ev.Key == ui.KeyR {
 			c.addRegion()
 			return true
 		}
 		if ev.Key == ui.KeyC {
 			c.addConnector()
+			return true
+		}
+		if ev.Mods&ui.Ctrl != 0 && ev.Key == ui.KeyZ {
+			c.undo()
+			return true
+		}
+		if ev.Mods&ui.Ctrl != 0 && ev.Key == ui.KeyY {
+			c.redo()
 			return true
 		}
 	case ui.InputKeyUp:
@@ -96,6 +104,8 @@ func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
 			c.colorPickID = ""
 			if c.spaceHeld {
 				c.startPan(ev.X, ev.Y)
+			} else {
+				c.startPen(bx, by)
 			}
 			return true
 		case 1:
@@ -111,6 +121,11 @@ func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
 		}
 	case ui.InputPointerMove:
 		switch {
+		case c.penActive:
+			bx, by := c.windowToBoard(ev.X, ev.Y)
+			c.addPenPoint(bx, by)
+			ctx.Invalidate()
+			return true
 		case c.resizeID != "":
 			bx, by := c.windowToBoard(ev.X, ev.Y)
 			it := c.boardItem(c.resizeID)
@@ -141,6 +156,10 @@ func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
 	case ui.InputPointerUp:
 		switch ev.Button {
 		case 0:
+			if c.penActive {
+				c.endPen()
+				return true
+			}
 			if c.resizeID != "" {
 				c.resizeID = ""
 				return true
@@ -319,4 +338,88 @@ func (c *Canvas) commitEdit() {
 	}
 	c.editID = ""
 	c.editText = ""
+}
+
+// startPen begins a freehand stroke at board point (bx, by).
+func (c *Canvas) startPen(bx, by float32) {
+	c.penActive = true
+	c.penPoints = [][2]float32{{bx, by}}
+}
+
+// addPenPoint appends a point to the in-progress stroke.
+func (c *Canvas) addPenPoint(bx, by float32) {
+	last := c.penPoints[len(c.penPoints)-1]
+	dx, dy := bx-last[0], by-last[1]
+	// Only add a point when it moves far enough to keep strokes light.
+	if dx*dx+dy*dy < 4 {
+		return
+	}
+	c.penPoints = append(c.penPoints, [2]float32{bx, by})
+}
+
+// endPen finalizes the in-progress stroke as a board item.
+func (c *Canvas) endPen() {
+	if !c.penActive || len(c.penPoints) < 2 {
+		c.penActive = false
+		c.penPoints = nil
+		return
+	}
+	// Bounds of the stroke.
+	minX, minY := c.penPoints[0][0], c.penPoints[0][1]
+	maxX, maxY := minX, minY
+	for _, pt := range c.penPoints {
+		if pt[0] < minX {
+			minX = pt[0]
+		}
+		if pt[0] > maxX {
+			maxX = pt[0]
+		}
+		if pt[1] < minY {
+			minY = pt[1]
+		}
+		if pt[1] > maxY {
+			maxY = pt[1]
+		}
+	}
+	it := &board.Item{
+		Kind:   board.KindStroke,
+		X:      minX, Y: minY,
+		W:      maxX - minX, H: maxY - minY,
+		Color:  "#000000", // pen color
+		Width:  2,
+		Points: c.penPoints,
+	}
+	c.board.AddItem(it)
+	c.penActive = false
+	c.penPoints = nil
+	c.changed()
+}
+
+// undo removes the most recently added stroke so it can be redone.
+func (c *Canvas) undo() {
+	var last *board.Item
+	items := c.board.Items()
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Kind == board.KindStroke {
+			last = items[i]
+			break
+		}
+	}
+	if last == nil {
+		return
+	}
+	c.board.RemoveItem(last.ID)
+	c.undone = append(c.undone, last)
+	c.changed()
+}
+
+// redo restores the most recently undone stroke.
+func (c *Canvas) redo() {
+	if len(c.undone) == 0 {
+		return
+	}
+	it := c.undone[len(c.undone)-1]
+	c.undone = c.undone[:len(c.undone)-1]
+	c.board.AddItem(it)
+	c.changed()
 }
