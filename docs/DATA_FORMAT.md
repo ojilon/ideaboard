@@ -60,7 +60,8 @@ Every item has:
 }
 ```
 
-- `text` is plain text (one paragraph). The underline highlight style is a
+- `text` is plain text (one paragraph). A note whose text is empty is removed
+  when its edit finishes. The underline highlight style is a
   rendering choice, not stored per word.
 - `fontSize` is the note's text size in DIPs; defaults to the setting.
 
@@ -99,8 +100,9 @@ Every item has:
 }
 ```
 
-- `from`/`to` reference note ids; the line is redrawn between the notes'
-  anchor points each frame so it follows when notes move.
+- `from`/`to` reference note ids; the line is redrawn each frame from the
+  edge of one note to the edge of the other, so it follows when notes move.
+  The `dash` field is not written by the current app (the dotted look is drawn).
 - `w`/`h` are the connector's bounding box (recomputed, may be stored for
   hit testing).
 

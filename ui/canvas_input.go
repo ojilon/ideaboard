@@ -6,184 +6,30 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-const (
-	noteMinW float32 = 180
-	noteMinH float32 = 112
-)
-
-// input turns pointer and key events into pan, zoom and note interaction.
+// input turns pointer and key events into tool actions, pan and zoom.
 func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
-	// While a note is being edited, the overlay TextArea takes input.
+	// While a note is being edited, the overlay text area has the keyboard.
+	// A press outside it finishes the edit, as clicking away does.
 	if c.editID != "" {
-		return false
+		if ev.Kind != ui.InputPointerDown {
+			return false
+		}
+		c.commitEdit()
 	}
-
 	switch ev.Kind {
 	case ui.InputKeyDown:
-		if ev.Key == ui.KeySpace {
-			c.spaceHeld = true
-			return true
-		}
-		if ev.Key == ui.KeyEscape {
-			if c.editID != "" {
-				c.commitEdit()
-				return true
-			}
-			if c.colorPickID != "" {
-				c.colorPickID = ""
-				return true
-			}
-			if c.onQuit != nil {
-				c.onQuit()
-				return true
-			}
-		}
-		if ev.Key == ui.KeyDelete || ev.Key == ui.KeyBackspace {
-			if c.selected != "" {
-				c.board.RemoveItem(c.selected)
-				c.selected = ""
-				c.changed()
-				return true
-			}
-		}
-		// Shortcuts.
-		if ev.Key == ui.KeyR {
-			c.addRegion()
-			return true
-		}
-		if ev.Key == ui.KeyC {
-			c.addConnector()
-			return true
-		}
-		if ev.Mods&ui.Ctrl != 0 && ev.Key == ui.KeyZ {
-			c.undo()
-			return true
-		}
-		if ev.Mods&ui.Ctrl != 0 && ev.Key == ui.KeyY {
-			c.redo()
-			return true
-		}
-		if ev.Mods&ui.Ctrl != 0 && ev.Key == ui.KeyComma {
-			if c.onSettingsToggle != nil {
-				c.onSettingsToggle()
-				return true
-			}
-		}
+		return c.keyDown(ev)
 	case ui.InputKeyUp:
 		if ev.Key == ui.KeySpace {
 			c.spaceHeld = false
 			return true
 		}
 	case ui.InputPointerDown:
-		bx, by := c.windowToBoard(ev.X, ev.Y)
-		switch ev.Button {
-		case 2:
-			// middle button: pan
-			c.startPan(ev.X, ev.Y)
-			return true
-		case 0:
-			note := c.hitNote(bx, by)
-			if ev.Clicks >= 2 {
-				// double-click
-				if note != nil {
-					c.beginEdit(note)
-				} else {
-					c.createNote(bx, by)
-				}
-				c.colorPickID = ""
-				return true
-			}
-			if note != nil {
-				c.selected = note.ID
-				c.colorPickID = ""
-				if c.nearCorner(note, bx, by) {
-					c.resizeID = note.ID
-					c.resizeStartW, c.resizeStartH = note.W, note.H
-					c.resizeStartBX, c.resizeStartBY = bx, by
-				} else {
-					c.dragID = note.ID
-					c.dragOffX, c.dragOffY = bx-note.X, by-note.Y
-				}
-				return true
-			}
-			c.selected = ""
-			c.colorPickID = ""
-			if c.spaceHeld {
-				c.startPan(ev.X, ev.Y)
-			} else {
-				c.startPen(bx, by)
-			}
-			return true
-		case 1:
-			// right-click: open the color picker on the note under the pointer.
-			note := c.hitNote(bx, by)
-			if note != nil {
-				c.colorPickID = note.ID
-				c.colorPickX, c.colorPickY = ev.X, ev.Y
-				c.selected = note.ID
-				return true
-			}
-			c.colorPickID = ""
-		}
+		return c.pointerDown(ev)
 	case ui.InputPointerMove:
-		switch {
-		case c.penActive:
-			bx, by := c.windowToBoard(ev.X, ev.Y)
-			c.addPenPoint(bx, by)
-			ctx.Invalidate()
-			return true
-		case c.resizeID != "":
-			bx, by := c.windowToBoard(ev.X, ev.Y)
-			it := c.boardItem(c.resizeID)
-			nw := it.W + (bx - c.resizeStartBX)
-			nh := it.H + (by - c.resizeStartBY)
-			if nw < noteMinW {
-				nw = noteMinW
-			}
-			if nh < noteMinH {
-				nh = noteMinH
-			}
-			it.W, it.H = nw, nh
-			ctx.Invalidate()
-			c.changed()
-			return true
-		case c.dragID != "":
-			bx, by := c.windowToBoard(ev.X, ev.Y)
-			it := c.boardItem(c.dragID)
-			c.board.MoveItem(c.dragID, bx-c.dragOffX-it.X, by-c.dragOffY-it.Y)
-			ctx.Invalidate()
-			c.changed()
-			return true
-		case c.draggingP:
-			c.panTo(ev.X, ev.Y)
-			ctx.Invalidate()
-			return true
-		}
+		return c.pointerMove(ctx, ev)
 	case ui.InputPointerUp:
-		switch ev.Button {
-		case 0:
-			if c.penActive {
-				c.endPen()
-				return true
-			}
-			if c.resizeID != "" {
-				c.resizeID = ""
-				return true
-			}
-			if c.dragID != "" {
-				c.dragID = ""
-				return true
-			}
-			if c.draggingP {
-				c.draggingP = false
-				return true
-			}
-		case 2:
-			if c.draggingP {
-				c.draggingP = false
-				return true
-			}
-		}
+		return c.pointerUp(ev)
 	case ui.InputScroll:
 		if ev.Mods&ui.Ctrl != 0 {
 			c.zoomAt(ev.X, ev.Y, ev.DY)
@@ -194,68 +40,312 @@ func (c *Canvas) input(ctx *ui.Context, ev ui.InputEvent) bool {
 	return false
 }
 
-func (c *Canvas) windowToBoard(wx, wy float32) (float32, float32) {
-	return wx/c.zoom + c.panX, wy/c.zoom + c.panY
-}
-
-func (c *Canvas) boardItem(id string) *board.Item {
-	for _, l := range c.board.Layers {
-		for _, it := range l.Items {
-			if it.ID == id {
-				return it
+// keyDown handles shortcuts. Plain letters pick tools (the design system's
+// keyboard equivalents); Ctrl combinations are edits and app commands.
+func (c *Canvas) keyDown(ev ui.InputEvent) bool {
+	ctrl := ev.Mods&ui.Ctrl != 0
+	if ctrl {
+		switch ev.Key {
+		case ui.KeyZ:
+			if ev.Mods&ui.Shift != 0 {
+				c.redoLast()
+			} else {
+				c.undo()
 			}
+		case ui.KeyY:
+			c.redoLast()
+		case ui.KeyV:
+			if c.onPaste != nil {
+				c.onPaste()
+			}
+		case ui.KeyComma:
+			if c.onSettingsToggle != nil {
+				c.onSettingsToggle()
+			}
+		case ui.KeyQ:
+			if c.onQuit != nil {
+				c.onQuit()
+			}
+		default:
+			return false
 		}
+		return true
 	}
-	return nil
+	switch ev.Key {
+	case ui.KeySpace:
+		c.spaceHeld = true
+	case ui.KeyEscape:
+		c.escape()
+	case ui.KeyDelete, ui.KeyBackspace:
+		return c.deleteSelected()
+	case ui.KeyV:
+		c.setTool(toolSelect)
+	case ui.KeyN:
+		x, y := c.ViewCenter()
+		c.createNoteAt(x, y)
+		c.setTool(toolSelect)
+	case ui.KeyR:
+		c.setTool(toolRegion)
+	case ui.KeyC:
+		c.setTool(toolConnector)
+	case ui.KeyP:
+		c.setTool(toolPen)
+	case ui.KeyE:
+		c.setTool(toolEraser)
+	case ui.KeyI:
+		c.setTool(toolImage)
+		c.pickImage()
+	default:
+		return false
+	}
+	return true
 }
 
-func (c *Canvas) hitNote(bx, by float32) *board.Item {
-	// front-most note wins: scan back to front.
-	items := c.board.Items()
-	for i := len(items) - 1; i >= 0; i-- {
-		it := items[i]
-		if it.Kind != board.KindNote {
-			continue
-		}
-		if bx >= it.X && bx <= it.X+it.W && by >= it.Y && by <= it.Y+it.H {
-			return it
-		}
+// escape cancels the current gesture or tool, then clears the selection.
+// It never quits the app: the window is frameless and has no other close
+// shortcut, so Ctrl+Q is the keyboard quit.
+func (c *Canvas) escape() {
+	switch {
+	case c.colorPickID != "":
+		c.colorPickID = ""
+	case c.tool != toolSelect:
+		c.setTool(toolSelect)
+	case c.selected != "":
+		c.selected = ""
 	}
-	return nil
 }
 
+// pickImage opens the image picker and returns to the select tool.
+func (c *Canvas) pickImage() {
+	c.setTool(toolSelect)
+	if c.onAttachImage != nil {
+		c.onAttachImage()
+	}
+}
+
+func (c *Canvas) pointerDown(ev ui.InputEvent) bool {
+	bx, by := c.windowToBoard(ev.X, ev.Y)
+	switch ev.Button {
+	case 2: // middle button pans
+		c.startPan(ev.X, ev.Y)
+		return true
+	case 1: // right button opens the color picker on a note
+		c.colorPickID = ""
+		if it := c.hitItem(bx, by); itemKindNote(it) {
+			c.colorPickID = it.ID
+			c.colorPickX, c.colorPickY = ev.X, ev.Y
+			c.selected = it.ID
+			return true
+		}
+		return false
+	case 0:
+	default:
+		return false
+	}
+
+	c.colorPickID = ""
+	if c.spaceHeld {
+		c.startPan(ev.X, ev.Y)
+		return true
+	}
+	hit := c.hitItem(bx, by)
+	if ev.Clicks >= 2 {
+		c.doubleClick(hit, bx, by)
+		return true
+	}
+	switch c.tool {
+	case toolSelect:
+		return c.selectDown(hit, bx, by, ev)
+	case toolNote:
+		c.createNoteAt(bx, by)
+		c.setTool(toolSelect)
+	case toolRegion:
+		c.draftX, c.draftY = bx, by
+		c.draft = &board.Item{Kind: board.KindRegion, X: bx, Y: by}
+	case toolConnector:
+		c.connectorDown(hit)
+	case toolPen:
+		c.penActive = true
+		c.penPoints = [][2]float32{{bx, by}}
+	case toolEraser:
+		c.erasing = true
+		c.eraseAt(bx, by)
+	case toolImage:
+		c.pickImage()
+	}
+	return true
+}
+
+// doubleClick edits a note or region label under the pointer, or creates a
+// note on empty space (the quick-capture gesture).
+func (c *Canvas) doubleClick(hit *board.Item, bx, by float32) {
+	switch {
+	case itemKindNote(hit):
+		c.beginEdit(hit)
+	case hit != nil && hit.Kind == board.KindRegion && by-hit.Y <= labelBoxH && bx-hit.X <= labelBoxW:
+		c.beginEdit(hit)
+	case hit == nil:
+		c.createNoteAt(bx, by)
+		c.setTool(toolSelect)
+	}
+}
+
+// selectDown selects the item under the pointer and starts a move or resize.
+// On empty space it clears the selection and starts a pan.
+func (c *Canvas) selectDown(hit *board.Item, bx, by float32, ev ui.InputEvent) bool {
+	if hit == nil {
+		c.selected = ""
+		c.startPan(ev.X, ev.Y)
+		return true
+	}
+	c.selected = hit.ID
+	c.board.ToFront(hit.ID)
+	if hit.Kind == board.KindConnector {
+		return true
+	}
+	if (hit.Kind == board.KindNote || hit.Kind == board.KindImage) && nearCorner(hit, bx, by) {
+		c.resizeID = hit.ID
+		c.resizeW, c.resizeH = hit.W, hit.H
+		c.resizeBX, c.resizeBY = bx, by
+		return true
+	}
+	c.dragID = hit.ID
+	c.dragOffX, c.dragOffY = bx-hit.X, by-hit.Y
+	return true
+}
+
+// connectorDown picks the two notes of a connector: the first click selects
+// a note, the second one links it to the first.
+func (c *Canvas) connectorDown(hit *board.Item) {
+	if !itemKindNote(hit) {
+		c.connFrom = ""
+		return
+	}
+	if c.connFrom == "" {
+		c.connFrom = hit.ID
+		c.selected = hit.ID
+		return
+	}
+	if hit.ID != c.connFrom {
+		c.addConnector(c.connFrom, hit.ID)
+		c.setTool(toolSelect)
+	}
+}
+
+func (c *Canvas) pointerMove(ctx *ui.Context, ev ui.InputEvent) bool {
+	bx, by := c.windowToBoard(ev.X, ev.Y)
+	switch {
+	case c.penActive:
+		c.addPenPoint(bx, by)
+		ctx.Invalidate()
+		return true
+	case c.erasing:
+		c.eraseAt(bx, by)
+		ctx.Invalidate()
+		return true
+	case c.draft != nil:
+		c.updateDraft(bx, by)
+		ctx.Invalidate()
+		return true
+	case c.resizeID != "":
+		it := c.boardItem(c.resizeID)
+		if it != nil {
+			minW, minH := noteMinW, noteMinH
+			if it.Kind == board.KindImage {
+				minW, minH = imageMinW, imageMinW*it.H/max(it.W, 1)
+			}
+			it.W = max(c.resizeW+(bx-c.resizeBX), minW)
+			it.H = max(c.resizeH+(by-c.resizeBY), minH)
+			ctx.Invalidate()
+			c.changed()
+		}
+		return true
+	case c.dragID != "":
+		if it := c.boardItem(c.dragID); it != nil {
+			it.X = bx - c.dragOffX
+			it.Y = by - c.dragOffY
+			ctx.Invalidate()
+			c.changed()
+		}
+		return true
+	case c.draggingP:
+		c.panTo(ev.X, ev.Y)
+		ctx.Invalidate()
+		return true
+	}
+	return false
+}
+
+func (c *Canvas) pointerUp(ev ui.InputEvent) bool {
+	switch ev.Button {
+	case 2:
+		if c.draggingP {
+			c.draggingP = false
+			return true
+		}
+	case 0:
+		switch {
+		case c.penActive:
+			c.endPen()
+		case c.erasing:
+			c.erasing = false
+		case c.draft != nil:
+			c.finishDraft()
+		case c.resizeID != "":
+			c.resizeID = ""
+		case c.dragID != "":
+			c.dragID = ""
+		case c.draggingP:
+			c.draggingP = false
+		default:
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// updateDraft sizes the region being drawn from its start point to (bx, by).
+func (c *Canvas) updateDraft(bx, by float32) {
+	x0, y0 := min(c.draftX, bx), min(c.draftY, by)
+	c.draft.X, c.draft.Y = x0, y0
+	c.draft.W = max(c.draftX, bx) - x0
+	c.draft.H = max(c.draftY, by) - y0
+}
+
+// finishDraft adds the drawn region. A plain click (no drag) makes a region
+// of the default size instead.
+func (c *Canvas) finishDraft() {
+	d := c.draft
+	c.draft = nil
+	if d.W < 20 || d.H < 20 {
+		c.createRegionAt(c.draftX-160, c.draftY-100, 320, 200)
+	} else {
+		c.createRegionAt(d.X, d.Y, max(d.W, regionMinW), max(d.H, regionMinH))
+	}
+	c.setTool(toolSelect)
+}
+
+// startPan begins panning from a window point.
 func (c *Canvas) startPan(x, y float32) {
 	c.draggingP = true
 	c.panStartX, c.panStartY = x, y
 }
 
+// panTo moves the view so the drag keeps pace with the pointer.
 func (c *Canvas) panTo(x, y float32) {
-	dx := (c.panStartX - x) / c.zoom
-	dy := (c.panStartY - y) / c.zoom
-	c.panX += dx
-	c.panY += dy
+	c.panX += (c.panStartX - x) / c.zoom
+	c.panY += (c.panStartY - y) / c.zoom
 	c.panStartX, c.panStartY = x, y
 	c.changed()
 }
 
-// zoomAt zooms by a factor derived from the wheel, keeping the point under
-// the pointer fixed.
+// zoomAt zooms by a factor from the wheel, keeping the point under the
+// pointer fixed.
 func (c *Canvas) zoomAt(wx, wy, dy float32) {
 	const step = 0.0015
-	factor := 1 + dy*step
-	if factor < 0.3 {
-		factor = 0.3
-	}
-	if factor > 3 {
-		factor = 3
-	}
-	newZoom := c.zoom * factor
-	if newZoom < 0.2 {
-		newZoom = 0.2
-	}
-	if newZoom > 5 {
-		newZoom = 5
-	}
+	factor := min(max(1+dy*step, 0.3), 3)
+	newZoom := min(max(c.zoom*factor, 0.2), 5)
 	if newZoom == c.zoom {
 		return
 	}
@@ -267,92 +357,7 @@ func (c *Canvas) zoomAt(wx, wy, dy float32) {
 	c.changed()
 }
 
-// createNote adds a soft-yellow note at board position (bx, by).
-func (c *Canvas) createNote(bx, by float32) {
-	w, h := noteMinW, noteMinH
-	c.board.AddItem(&board.Item{
-		Kind:     board.KindNote,
-		X:        bx - w/2,
-		Y:        by - h/2,
-		W:        w,
-		H:        h,
-		Color:    "#FFF4C7", // design system note-yellow
-		Text:     "",
-		FontSize: 16,
-	})
-	c.changed()
-}
-
-// addRegion places a labeled dotted region at the board center of the view.
-func (c *Canvas) addRegion() {
-	c.board.AddItem(&board.Item{
-		Kind:   board.KindRegion,
-		X:      c.panX + 100,
-		Y:      c.panY + 60,
-		W:      320,
-		H:      200,
-		Color:  "", // design-system region outline color
-		Label:  "Mon",
-		FontSize: 0,
-	})
-	c.changed()
-}
-
-// addConnector draws a dotted line between the first two notes on the board.
-func (c *Canvas) addConnector() {
-	notes := c.notes()
-	if len(notes) < 2 {
-		return
-	}
-	c.board.AddItem(&board.Item{
-		Kind:   board.KindConnector,
-		X:      0, Y: 0, W: 0, H: 0,
-		Color:  "",
-		From:   notes[0].ID,
-		To:     notes[1].ID,
-		FontSize: 0,
-	})
-	c.changed()
-}
-
-func (c *Canvas) notes() []*board.Item {
-	var out []*board.Item
-	for _, l := range c.board.Layers {
-		for _, it := range l.Items {
-			if it.Kind == board.KindNote {
-				out = append(out, it)
-			}
-		}
-	}
-	return out
-}
-
-// beginEdit starts in-place editing of a note.
-func (c *Canvas) beginEdit(it *board.Item) {
-	c.editID = it.ID
-	c.editText = it.Text
-}
-
-// commitEdit applies the edited text to its note and leaves edit mode.
-func (c *Canvas) commitEdit() {
-	if c.editID == "" {
-		return
-	}
-	if it := c.boardNote(c.editID); it != nil {
-		it.Text = c.editText
-		c.changed()
-	}
-	c.editID = ""
-	c.editText = ""
-}
-
-// startPen begins a freehand stroke at board point (bx, by).
-func (c *Canvas) startPen(bx, by float32) {
-	c.penActive = true
-	c.penPoints = [][2]float32{{bx, by}}
-}
-
-// addPenPoint appends a point to the in-progress stroke.
+// startPen, addPenPoint and endPen draw a freehand stroke.
 func (c *Canvas) addPenPoint(bx, by float32) {
 	last := c.penPoints[len(c.penPoints)-1]
 	dx, dy := bx-last[0], by-last[1]
@@ -363,69 +368,10 @@ func (c *Canvas) addPenPoint(bx, by float32) {
 	c.penPoints = append(c.penPoints, [2]float32{bx, by})
 }
 
-// endPen finalizes the in-progress stroke as a board item.
 func (c *Canvas) endPen() {
-	if !c.penActive || len(c.penPoints) < 2 {
-		c.penActive = false
-		c.penPoints = nil
-		return
+	if len(c.penPoints) >= 2 {
+		c.addStroke(c.penPoints)
 	}
-	// Bounds of the stroke.
-	minX, minY := c.penPoints[0][0], c.penPoints[0][1]
-	maxX, maxY := minX, minY
-	for _, pt := range c.penPoints {
-		if pt[0] < minX {
-			minX = pt[0]
-		}
-		if pt[0] > maxX {
-			maxX = pt[0]
-		}
-		if pt[1] < minY {
-			minY = pt[1]
-		}
-		if pt[1] > maxY {
-			maxY = pt[1]
-		}
-	}
-	it := &board.Item{
-		Kind:   board.KindStroke,
-		X:      minX, Y: minY,
-		W:      maxX - minX, H: maxY - minY,
-		Color:  "#000000", // pen color
-		Width:  2,
-		Points: c.penPoints,
-	}
-	c.board.AddItem(it)
 	c.penActive = false
 	c.penPoints = nil
-	c.changed()
-}
-
-// undo removes the most recently added stroke so it can be redone.
-func (c *Canvas) undo() {
-	var last *board.Item
-	items := c.board.Items()
-	for i := len(items) - 1; i >= 0; i-- {
-		if items[i].Kind == board.KindStroke {
-			last = items[i]
-			break
-		}
-	}
-	if last == nil {
-		return
-	}
-	c.board.RemoveItem(last.ID)
-	c.undone = append(c.undone, last)
-	c.changed()
-}
-
-// redo restores the most recently undone stroke.
-func (c *Canvas) redo() {
-	if len(c.undone) == 0 {
-		return
-	}
-	it := c.undone[len(c.undone)-1]
-	c.undone = c.undone[:len(c.undone)-1]
-	c.board.AddItem(it)
-	c.changed()
 }

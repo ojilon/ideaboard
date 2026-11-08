@@ -9,7 +9,7 @@ Requires Go 1.27.3+.
 
 MyGo (the GUI library) is used through a `replace` directive in `go.mod`
 pointing to a local clone. The clone is expected at `D:\projects\goui`
-(adjust `IDEABOARD_MYGO` if it lives elsewhere).
+; if it lives elsewhere, edit the `replace` line in `go.mod`.
 
 ```bat
 cd D:\projects\ideaboard
@@ -25,9 +25,19 @@ go build -trimpath -o ideaboard.exe .
 
 ### Develop
 
-The app opens a frameless, transparent window on the last board. Double-click
-empty space to create a note; drag notes to move them; resize by the bottom
-right corner; double-click a note's text to edit it in place.
+The app opens on the last board (or the board list). Tools are in the floating
+toolbar at the top:
+
+- Select (V): click and drag notes, regions, images and connectors; drag empty
+  space to pan; drag a bottom-right corner to resize a note or image.
+- Note (N): click to add a note; you can type at once. Double-click empty
+  space to do the same. Click away or press Escape to finish.
+- Region (R): drag to draw a labeled region; double-click its label to rename.
+- Connector (C): click two notes to link them.
+- Pen (P) / Eraser (E): freehand drawing and erasing.
+- Image (I) or Ctrl+V: add an image (PNG or JPEG).
+- Ctrl+Z / Ctrl+Y: undo and redo adds and removals. Ctrl+,: settings.
+  Ctrl+Q: quit.
 
 ## Project layout
 
